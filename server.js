@@ -181,7 +181,7 @@ app.get('/move', (req, res) => {
     if (!player.alive) return res.status(403).json({ error: 'Du bist tot!' });
 
     // Schrittweite
-    const step = 0.25;
+    const step = 1;
     let targetX = player.x;
     let targetY = player.y;
 
