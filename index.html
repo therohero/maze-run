@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Maze Escape</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            html, body {
+                margin: 0;
+                padding: 0;
+                width: 100vw;
+                height: 100vh;
+                overflow: hidden;
+                background: #111;
+            }
+            #gameCanvas {
+                display: block;
+                position: absolute;
+                left: 50%;
+                top: 50%;
+                transform: translate(-50%, -50%);
+                background: #111;
+            }
+            #gameEndOverlay {
+                display: none;
+                position: fixed;
+                left: 0; top: 0; width: 100vw; height: 100vh;
+                background: rgba(0,0,0,0.8);
+                z-index: 100;
+                align-items: center;
+                justify-content: center;
+            }
+            #gameEndContent {
+                background:#222;
+                color:#fff;
+                padding:40px 60px;
+                border-radius:20px;
+                text-align:center;
+                min-width:400px;
+                box-shadow:0 0 40px #000;
+            }
+        </style>
+    </head>
+    <body>
+        <canvas id="gameCanvas"></canvas>
+        <button id="lockBtn" style="position:absolute;top:10px;right:10px;z-index:10;">Keiner kommt mehr!</button>
+        
+        <div id="gameEndOverlay">
+            <div id="gameEndContent">
+            </div>
+        </div>
+
+        <script>
+            let players = [];
+            let id;
+            let keyState = {};
+
+            const $ = id => document.getElementById(id);
+            const canvas = $('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            const GAME_WIDTH = 1920;
+            const GAME_HEIGHT = 1080;
+
+            let lastWidth = 0;
+            let lastHeight = 0;
+            let lastLag = 0;
+
+            let ghostImg = new Image();
+            ghostImg.src = "ghost.png";
+            let mauerImg = new Image();
+            mauerImg.src = "mauer.png";
+            let playerImg = new Image();
+            playerImg.src = "player.png";
+
+            function fitCanvas() {
+                const windowWidth = window.innerWidth;
+                const windowHeight = window.innerHeight;
+                const scale = Math.min(windowWidth / GAME_WIDTH, windowHeight / GAME_HEIGHT);
+
+                canvas.width = GAME_WIDTH;
+                canvas.height = GAME_HEIGHT;
+
+                canvas.style.width = `${GAME_WIDTH * scale}px`;
+                canvas.style.height = `${GAME_HEIGHT * scale}px`;
+                canvas.style.left = '50%';
+                canvas.style.top = '50%';
+                canvas.style.transform = 'translate(-50%, -50%)';
+
+                lastWidth = windowWidth;
+                lastHeight = windowHeight;
+            }
+
+            window.addEventListener('resize', fitCanvas);
+            window.addEventListener('fullscreenchange', fitCanvas);
+            window.addEventListener('webkitfullscreenchange', fitCanvas);
+            window.addEventListener('zfullscreenchange', fitCanvas);
+
+            fitCanvas();
+
+            let maze = [];
+            let cols = 0;
+            let rows = 0;
+            const CELL_SIZE = 40;
+
+            async function loadMaze() {
+                const res = await fetch('/maze');
+                const data = await res.json();
+                maze = data.maze;
+                cols = data.cols;
+                rows = data.rows;
+            }
+
+            let showGameStart = false;
+            let showRole = '';
+            let gameStartDisplayTime = 0;
+            let lastGameLocked = false;
+
+            function updateGameStartDisplay() {
+                // Wenn das Spiel gerade gelockt wurde (Übergang von false zu true)
+                if (!lastGameLocked && gameLocked) {
+                    showGameStart = true;
+                    gameStartDisplayTime = Date.now();
+                    // Rolle bestimmen
+                    const myPlayer = players.find(p => p.id === id);
+                    if (myPlayer && myPlayer.isGhost) showRole = 'GEIST';
+                    else showRole = 'SPIELER';
+                    setTimeout(() => { showGameStart = false; }, 3000);
+                }
+                lastGameLocked = gameLocked;
+            }
+
+            // Zeige "SPIEL BEGINNT" und Rolle beim Lock
+            document.getElementById('lockBtn').onclick = async () => {
+                const res = await fetch('/lock', { method: 'POST' });
+                if (res.ok) {
+                    document.getElementById('lockBtn').style.display = 'none';
+                    showGameStart = true;
+                    gameStartDisplayTime = Date.now();
+                    // Rolle bestimmen
+                    const myPlayer = players.find(p => p.id === id);
+                    if (myPlayer && myPlayer.isGhost) showRole = 'GEIST';
+                    else showRole = 'SPIELER';
+                    setTimeout(() => { showGameStart = false; }, 3000);
+                } else {
+                    alert('Spiel kann nicht gesperrt werden!');
+                }
+            };
+
+            function drawMaze() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Wände zeichnen (grau)
+                for (let y = 0; y < rows; y++) {
+                    for (let x = 0; x < cols; x++) {
+                        if (maze[y] && maze[y][x] === 0) { // 0 = Wand
+                            ctx.drawImage(mauerImg, x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                        }
+                    }
+                }
+                // Spieler & Geister zeichnen
+                for (const player of players) {
+                    if (player.death) continue;
+                    if (player.isGhost) {
+                        ctx.drawImage(ghostImg, player.x * CELL_SIZE, player.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                    } else {
+                        ctx.drawImage(playerImg, player.x * CELL_SIZE, player.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                    }
+                }
+            }
+
+            async function fetchPlayers() {
+                const res = await fetch('/players');
+                const data = await res.json();
+                players = data.players;
+                gameLocked = data.gameLocked;
+                return players;
+            }
+
+            async function tryMove(dir) {
+                const start = performance.now();
+                const res = await fetch(`/move?dir=${dir}&id=${id}`);
+                const end = performance.now();
+                lastLag = Math.round(end - start); // Latenz in ms
+
+                if (!res.ok) {
+                    try {
+                        const err = await res.json();
+                        console.log('Fehler:', err.error);
+                    } catch {
+                        console.log('Serverfehler');
+                    }
+                    return;
+                }
+                await res.json();
+            }
+
+            function drawLag() {
+                ctx.font = '20px monospace';
+                ctx.fillStyle = 'yellow';
+                ctx.fillText(`Lag: ${lastLag} ms`, 10, 30);
+            }
+
+            let gameResult = null;
+            let timer = 0;
+
+            async function fetchStatus() {
+                const res = await fetch('/status');
+                const data = await res.json();
+                timer = data.timeLeft;
+                gameLocked = data.gameLocked;
+            }
+
+            function drawTimerAndResult() {
+                ctx.font = '24px monospace';
+                ctx.fillStyle = 'yellow';
+                if (!gameResult) {
+                    // Timer anzeigen (Restzeit in Minuten:Sekunden)
+                    const min = Math.floor(timer / 60);
+                    const sec = timer % 60;
+                    ctx.fillText(`Zeit: ${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`, 10, 60);
+                }
+            }
+
+            function showGameEnd(result) {
+                const overlay = document.getElementById('gameEndOverlay');
+                const content = document.getElementById('gameEndContent');
+                let html = `<h1 style="color:#FFD700; font-size:3em; margin-bottom:0.2em;">SPIEL ENDET</h1>`;
+                html += `<h2 style="color:#00FFFF; margin-bottom:1em;">Gewinner: ${result.result.winner}</h2>`;
+                html += `<table style="margin:auto; font-size:1.3em; border-collapse:collapse;">
+                    <tr>
+                        <th style="padding:8px 16px;">Player</th>
+                        <th style="padding:8px 16px;">Rolle</th>
+                        <th style="padding:8px 16px;">Kills</th>
+                        <th style="padding:8px 16px;">Überlebenszeit</th>
+                    </tr>`;
+                players.forEach((p, i) => {
+                    let rolle = p.isGhost ? 'Geist' : 'Spieler';
+                    let kills = 0;
+                    let zeit = '';
+                    if (p.isGhost) {
+                        kills = result.result.ghosts.find(g => g.id === p.id)?.kills ?? 0;
+                        zeit = '-';
+                    } else {
+                        const survivor = result.result.survivors.find(s => s.id === p.id);
+                        const liveTime = survivor ? survivor.liveTime : 0;
+                        kills = Math.floor((liveTime/1000) / 120); // 2 Minuten = 120 Sekunden = 1 Kill
+                        zeit = Math.round((liveTime/1000)) + ' s';
+                    }
+                    html += `<tr>
+                        <td style="padding:8px 16px;">Player ${i+1}</td>
+                        <td style="padding:8px 16px;">${rolle}</td>
+                        <td style="padding:8px 16px;">${kills}</td>
+                        <td style="padding:8px 16px;">${zeit}</td>
+                    </tr>`;
+                });
+                html += `</table>`;
+                content.innerHTML = html;
+                overlay.style.display = 'flex';
+                setTimeout(() => {
+                    overlay.style.display = 'none';
+                }, 10000); // 10 Sekunden anzeigen
+            }
+
+            async function pollResult() {
+                const res = await fetch('/result');
+                const data = await res.json();
+                if (!data.running) {
+                    gameResult = data;
+                    showGameEnd(data); // Overlay anzeigen
+                    setTimeout(async () => {
+                        gameResult = null;
+                        document.getElementById('lockBtn').style.display = 'block';
+                        timer = 10 * 60;
+                        await loadMaze(); // Maze neu laden!
+                    }, 10000);
+                }
+            }
+
+            function updateTimer() {
+                if (!gameResult) {
+                    if (gameLocked && timer > 0) timer--;
+                }
+            }
+
+            // Anzeige im Game Loop
+            function drawGameStart() {
+                if (showGameStart) {
+                    ctx.save();
+                    ctx.font = 'bold 80px Arial';
+                    ctx.fillStyle = '#FFD700';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('SPIEL BEGINNT', canvas.width / 2, canvas.height / 2 - 40);
+                    ctx.font = 'bold 50px Arial';
+                    ctx.fillStyle = '#00FFFF';
+                    ctx.fillText(showRole, canvas.width / 2, canvas.height / 2 + 40);
+                    ctx.restore();
+                }
+            }
+
+            async function gameLoop() {
+                await fetchStatus(); // Timer und Lock-Status vom Server holen
+                players = await fetchPlayers();
+                drawMaze();
+                drawTimerAndResult();
+                drawGameStart();
+
+                // Button ausblenden, wenn das Spiel gelockt ist
+                if (gameLocked) {
+                    document.getElementById('lockBtn').style.display = 'none';
+                }
+
+                updateGameStartDisplay(); // Hier die Anzeige für alle Spieler steuern
+
+                if (id && !gameResult) {
+                    if (keyState['ArrowUp'])    await tryMove('up');
+                    if (keyState['ArrowDown'])  await tryMove('down');
+                    if (keyState['ArrowLeft'])  await tryMove('left');
+                    if (keyState['ArrowRight']) await tryMove('right');
+                }
+                await pollResult();
+                requestAnimationFrame(gameLoop);
+            }
+
+            window.addEventListener("keydown", function (e) {
+                keyState[e.key] = true;
+            });
+
+            window.addEventListener("keyup", function (e) {
+                keyState[e.key] = false;
+            });
+
+            window.onload = async () => {
+                if (localStorage.getItem('playerId') && players.find(p => p.id === localStorage.getItem('playerId'))) {
+                    id = localStorage.getItem('playerId');
+                    await loadMaze();
+                    players = await fetchPlayers();
+                    drawMaze();
+                    gameLoop();
+                    return;
+                }
+                const joinRes = await fetch('join');
+                const joinData = await joinRes.json();
+                if (joinData.error) {
+                    alert(joinData.error);
+                    return;
+                }
+                id = joinData.playerId;
+                localStorage.setItem('playerId', id);
+                await loadMaze();
+                players = await fetchPlayers();
+                drawMaze();
+
+                gameLoop();
+            }
+        </script>
+    </body>
+</html>
