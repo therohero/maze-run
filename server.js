@@ -1,3 +1,6 @@
+// --- Chat Speicher ---
+let chatMessages = [];
+
 const express = require('express');
 const path = require('path');
 
@@ -55,14 +58,45 @@ function getGhostCount(playerCount) {
     return Math.ceil(playerCount / 10);
 }
 
+// Chat-API: Nachrichten holen
+app.get('/chat', (req, res) => {
+    res.json(chatMessages.slice(-30)); // Nur die letzten 30 Nachrichten
+});
+
+// Chat-API: Nachricht senden
+app.post('/chat', express.json(), (req, res) => {
+    const { id, text } = req.body;
+    const player = players.find(p => p.id === id);
+    if (!player || !text || typeof text !== 'string') return res.status(400).end();
+    chatMessages.push({ name: player.name || 'Spieler', text: text.substring(0,100) });
+    if (chatMessages.length > 100) chatMessages = chatMessages.slice(-100);
+    res.json({ ok: true });
+});
+// Chat-API: Nachricht senden per GET (nicht empfohlen)
+app.get('/chat/send', (req, res) => {
+    const { id, text } = req.query;
+    const player = players.find(p => p.id === id);
+    if (!player || !text || typeof text !== 'string') return res.status(400).end();
+    chatMessages.push({ name: player.name || 'Spieler', text: text.substring(0,100) });
+    if (chatMessages.length > 100) chatMessages = chatMessages.slice(-100);
+    res.json({ ok: true });
+});
+
 app.get('/maze', (req, res) => {
     res.json({ maze, cols: COLS, rows: ROWS, cellSize: CELL_SIZE });
 });
 
 app.get('/join', (req, res) => {
-    if (gameLocked) return res.status(403).json({ error: 'Kein Join mehr möglich!' });
-
-    const playerId = Date.now().toString(36) + Math.random().toString(36);
+    // Join ist immer erlaubt
+        const name = (req.query.name || '').trim().substring(0,16) || 'Spieler';
+        // Prüfe, ob Spieler mit diesem Namen schon existiert (Case-insensitive)
+        let existing = players.find(p => p.name && p.name.toLowerCase() === name.toLowerCase());
+        if (existing) {
+            // Spieler übernehmen (ID bleibt gleich, Position etc. bleiben erhalten)
+            return res.json({ playerId: existing.id });
+        }
+        // Neuer Spieler
+        const playerId = Date.now().toString(36) + Math.random().toString(36);
 
     // Suche alle freien Felder (maze[y][x] === 1)
     const freeFields = [];
@@ -80,7 +114,15 @@ app.get('/join', (req, res) => {
 
     const start = freeFields[Math.floor(Math.random() * freeFields.length)];
 
-    players.push({ id: playerId, x: start.x, y: start.y, alive: true, isGhost: false, lastKill: 0 });
+    // Jeder 11., 21., ... Spieler ist sofort ein Geist
+    let isGhost = false;
+    const numPlayers = players.length + 1;
+    if (numPlayers % 10 === 1 && numPlayers > 1) {
+        isGhost = true;
+        ghosts.push(playerId);
+    }
+
+    players.push({ id: playerId, x: start.x, y: start.y, alive: true, isGhost, lastKill: 0, name });
     res.json({ playerId });
 });
 
@@ -160,10 +202,21 @@ app.post('/lock', (req, res) => {
     gameLocked = true;
     const ghostCount = getGhostCount(players.length);
 
-    // Zufällig Geister auswählen
-    const shuffled = players.slice().sort(() => Math.random() - 0.5);
-    ghosts = shuffled.slice(0, ghostCount).map(p => p.id);
-
+    // Nur noch fehlende Geister bestimmen (falls durch Join schon welche gesetzt wurden)
+    const aktuelleGeister = ghosts.slice();
+    const nochZuVergeben = ghostCount - aktuelleGeister.length;
+    if (nochZuVergeben > 0) {
+        // Wähle zufällig weitere Geister aus
+        const candidates = players.filter(p => !p.isGhost);
+        const shuffled = candidates.slice().sort(() => Math.random() - 0.5);
+        const neueGeister = shuffled.slice(0, nochZuVergeben).map(p => p.id);
+        ghosts.push(...neueGeister);
+        for (const id of neueGeister) {
+            const p = players.find(pl => pl.id === id);
+            if (p) p.isGhost = true;
+        }
+    }
+    // Setze isGhost für alle Geister (auch für die, die schon vorher gesetzt wurden)
     for (const player of players) {
         if (ghosts.includes(player.id)) player.isGhost = true;
     }

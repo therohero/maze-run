@@ -42,12 +42,19 @@
         </style>
     </head>
     <body>
+        <div id="startScreen" style="position:fixed;left:0;top:0;width:100vw;height:100vh;background:#111;z-index:200;display:flex;align-items:center;justify-content:center;">
+            <div style="background:#222;padding:40px 60px;border-radius:20px;box-shadow:0 0 40px #000;text-align:center;min-width:400px;">
+                <h1 style="color:#FFD700;">Maze Escape</h1>
+                <p style="color:#fff;font-size:1.2em;">Finde den Ausgang, ohne vom Geist erwischt zu werden!<br>Jeder 11. Spieler wird automatisch ein Geist.<br>Gib deinen Namen ein, um zu starten:</p>
+                <input id="nameInput" type="text" maxlength="16" placeholder="Dein Name" style="font-size:1.2em;padding:8px 16px;border-radius:8px;border:none;outline:none;">
+                <br><br>
+                <button id="startBtn" style="font-size:1.2em;padding:8px 32px;border-radius:8px;background:#FFD700;color:#222;border:none;cursor:pointer;">Start</button>
+            </div>
+        </div>
         <canvas id="gameCanvas"></canvas>
         <button id="lockBtn" style="position:absolute;top:10px;right:10px;z-index:10;">Keiner kommt mehr!</button>
-        
         <div id="gameEndOverlay">
-            <div id="gameEndContent">
-            </div>
+            <div id="gameEndContent"></div>
         </div>
 
         <script>
@@ -141,7 +148,14 @@
                     const myPlayer = players.find(p => p.id === id);
                     if (myPlayer && myPlayer.isGhost) showRole = 'GEIST';
                     else showRole = 'SPIELER';
-                    setTimeout(() => { showGameStart = false; }, 3000);
+
+                    // Geisternamen für Anzeige im GameStart speichern
+                    const data = await res.json();
+                    const ghostIds = data.ghosts;
+                    if (!players || players.length === 0) players = await fetchPlayers();
+                    window._lastGhostNames = players.filter(p => ghostIds.includes(p.id)).map(p => p.name && p.name.trim() ? p.name : 'Spieler');
+
+                    setTimeout(() => { showGameStart = false; window._lastGhostNames = []; }, 3000);
                 } else {
                     alert('Spiel kann nicht gesperrt werden!');
                 }
@@ -160,11 +174,22 @@
                 // Spieler & Geister zeichnen
                 for (const player of players) {
                     if (player.death) continue;
+                    let px = player.x * CELL_SIZE;
+                    let py = player.y * CELL_SIZE;
                     if (player.isGhost) {
-                        ctx.drawImage(ghostImg, player.x * CELL_SIZE, player.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                        ctx.drawImage(ghostImg, px, py, CELL_SIZE, CELL_SIZE);
                     } else {
-                        ctx.drawImage(playerImg, player.x * CELL_SIZE, player.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                        ctx.drawImage(playerImg, px, py, CELL_SIZE, CELL_SIZE);
                     }
+                    // Name über Kopf anzeigen (immer, Fallback: 'Spieler')
+                    const pname = player.name && player.name.trim() ? player.name : 'Spieler';
+                    ctx.font = 'bold 18px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = '#fff';
+                    ctx.strokeStyle = '#111';
+                    ctx.lineWidth = 4;
+                    ctx.strokeText(pname, px + CELL_SIZE/2, py - 6);
+                    ctx.fillText(pname, px + CELL_SIZE/2, py - 6);
                 }
             }
 
@@ -293,9 +318,125 @@
                     ctx.font = 'bold 50px Arial';
                     ctx.fillStyle = '#00FFFF';
                     ctx.fillText(showRole, canvas.width / 2, canvas.height / 2 + 40);
+
+                    // Geisterliste unter der Rolle anzeigen
+                    if (window._lastGhostNames && window._lastGhostNames.length > 0) {
+                        ctx.font = 'bold 28px Arial';
+                        ctx.fillStyle = '#fff';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('Geister:', canvas.width / 2, canvas.height / 2 + 90);
+                        ctx.font = '24px Arial';
+                        let y = canvas.height / 2 + 120;
+                        for (const n of window._lastGhostNames) {
+                            ctx.fillText('👻 ' + n, canvas.width / 2, y);
+                            y += 32;
+                        }
+                    }
                     ctx.restore();
                 }
             }
+
+            // Joystick-Overlay für Touch-Steuerung
+            let joystickActive = false;
+            let joystickCenter = { x: 0, y: 0 };
+            let joystickPointer = { x: 0, y: 0 };
+            let joystickDir = null;
+            let joystickMoveInterval = null;
+
+            function drawJoystick() {
+                if (!joystickActive) return;
+                const ctx2 = ctx;
+                ctx2.save();
+                ctx2.globalAlpha = 0.4;
+                ctx2.beginPath();
+                ctx2.arc(joystickCenter.x, joystickCenter.y, 80, 0, 2 * Math.PI);
+                ctx2.fillStyle = "#888";
+                ctx2.fill();
+                ctx2.globalAlpha = 1.0;
+                ctx2.beginPath();
+                ctx2.arc(joystickPointer.x, joystickPointer.y, 32, 0, 2 * Math.PI);
+                ctx2.fillStyle = "#FFD700";
+                ctx2.fill();
+                ctx2.restore();
+            }
+
+            // Joystick-Richtung bestimmen
+            function getJoystickDir(dx, dy) {
+                if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return null;
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    return dx > 0 ? 'right' : 'left';
+                } else {
+                    return dy > 0 ? 'down' : 'up';
+                }
+            }
+
+            function startJoystickMove(dir) {
+                if (joystickMoveInterval) clearInterval(joystickMoveInterval);
+                joystickDir = dir;
+                if (dir) mobileMove(dir);
+                joystickMoveInterval = setInterval(() => {
+                    if (joystickDir) mobileMove(joystickDir);
+                }, 120);
+            }
+
+            function stopJoystickMove() {
+                if (joystickMoveInterval) clearInterval(joystickMoveInterval);
+                joystickMoveInterval = null;
+                joystickDir = null;
+                joystickActive = false;
+            }
+
+            // Touch-Events für Joystick
+            canvas.addEventListener('touchstart', function(e) {
+                if (e.touches.length === 1) {
+                    const rect = canvas.getBoundingClientRect();
+                    const x = (e.touches[0].clientX - rect.left) * (canvas.width / rect.width);
+                    const y = (e.touches[0].clientY - rect.top) * (canvas.height / rect.height);
+                    joystickActive = true;
+                    joystickCenter = { x, y };
+                    joystickPointer = { x, y };
+                    joystickDir = null;
+                    drawMaze();
+                    drawJoystick();
+                }
+            });
+
+            canvas.addEventListener('touchmove', function(e) {
+                if (!joystickActive) return;
+                const rect = canvas.getBoundingClientRect();
+                const x = (e.touches[0].clientX - rect.left) * (canvas.width / rect.width);
+                const y = (e.touches[0].clientY - rect.top) * (canvas.height / rect.height);
+                // Begrenze den Pointer auf einen Radius von 80px um das Zentrum
+                const dx = x - joystickCenter.x;
+                const dy = y - joystickCenter.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                let px = x, py = y;
+                if (dist > 80) {
+                    const angle = Math.atan2(dy, dx);
+                    px = joystickCenter.x + Math.cos(angle) * 80;
+                    py = joystickCenter.y + Math.sin(angle) * 80;
+                }
+                joystickPointer = { x: px, y: py };
+                // Richtung bestimmen
+                const dir = getJoystickDir(px - joystickCenter.x, py - joystickCenter.y);
+                if (dir !== joystickDir) {
+                    startJoystickMove(dir);
+                }
+                drawMaze();
+                drawJoystick();
+            });
+
+            canvas.addEventListener('touchend', function(e) {
+                stopJoystickMove();
+                drawMaze();
+            });
+
+            // Joystick auch im Game-Loop zeichnen
+            const origDrawMaze = drawMaze;
+            drawMaze = function() {
+                origDrawMaze();
+                drawJoystick();
+            };
 
             async function gameLoop() {
                 await fetchStatus(); // Timer und Lock-Status vom Server holen
@@ -330,27 +471,100 @@
             });
 
             window.onload = async () => {
-                if (localStorage.getItem('playerId') && players.find(p => p.id === localStorage.getItem('playerId'))) {
-                    id = localStorage.getItem('playerId');
+                // Starte mit Startscreen
+                document.getElementById('startScreen').style.display = 'flex';
+                document.getElementById('gameCanvas').style.display = 'none';
+                document.getElementById('lockBtn').style.display = 'none';
+                document.getElementById('startBtn').onclick = async () => {
+                    const name = document.getElementById('nameInput').value.trim().substring(0,16);
+                    if (!name) {
+                        alert('Bitte gib einen Namen ein!');
+                        return;
+                    }
+                    // Join mit Name
+                    const joinRes = await fetch('join?name=' + encodeURIComponent(name));
+                    const joinData = await joinRes.json();
+                    if (joinData.error) {
+                        alert(joinData.error);
+                        return;
+                    }
+                    id = joinData.playerId;
+                    localStorage.setItem('playerId', id);
+                    localStorage.setItem('playerName', name);
+                    document.getElementById('startScreen').style.display = 'none';
+                    document.getElementById('gameCanvas').style.display = 'block';
+                    document.getElementById('lockBtn').style.display = 'block';
                     await loadMaze();
                     players = await fetchPlayers();
                     drawMaze();
                     gameLoop();
-                    return;
-                }
-                const joinRes = await fetch('join');
-                const joinData = await joinRes.json();
-                if (joinData.error) {
-                    alert(joinData.error);
-                    return;
-                }
-                id = joinData.playerId;
-                localStorage.setItem('playerId', id);
-                await loadMaze();
-                players = await fetchPlayers();
-                drawMaze();
+                };
+            }
 
-                gameLoop();
+            // Handy-Erkennung
+            function isMobile() {
+                return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+            }
+
+            // Touch-Gesten für Wischen/Drücken auf dem ganzen Bildschirm
+            let touchStartX = null;
+            let touchStartY = null;
+            let swipeMoveInterval = null;
+            let swipeDir = null;
+
+            function getSwipeDir(dx, dy) {
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    return dx > 0 ? 'right' : 'left';
+                } else {
+                    return dy > 0 ? 'down' : 'up';
+                }
+            }
+
+            function startSwipeMove(dir) {
+                if (swipeMoveInterval) clearInterval(swipeMoveInterval);
+                swipeDir = dir;
+                mobileMove(dir); // Sofort bewegen
+                swipeMoveInterval = setInterval(() => {
+                    mobileMove(dir);
+                }, 120); // alle 120ms bewegen, solange gedrückt
+            }
+
+            function stopSwipeMove() {
+                if (swipeMoveInterval) clearInterval(swipeMoveInterval);
+                swipeMoveInterval = null;
+                swipeDir = null;
+            }
+
+            canvas.addEventListener('touchstart', function(e) {
+                if (e.touches.length === 1) {
+                    touchStartX = e.touches[0].clientX;
+                    touchStartY = e.touches[0].clientY;
+                }
+            });
+
+            canvas.addEventListener('touchmove', function(e) {
+                if (touchStartX === null || touchStartY === null) return;
+                const dx = e.touches[0].clientX - touchStartX;
+                const dy = e.touches[0].clientY - touchStartY;
+                // Schwelle, damit nicht jede kleine Bewegung zählt
+                if (Math.abs(dx) < 30 && Math.abs(dy) < 30) return;
+                const dir = getSwipeDir(dx, dy);
+                if (swipeDir !== dir) {
+                    startSwipeMove(dir);
+                }
+            });
+
+            canvas.addEventListener('touchend', function(e) {
+                stopSwipeMove();
+                touchStartX = null;
+                touchStartY = null;
+            });
+
+            // Funktion für Bewegung (wie gehabt)
+            function mobileMove(dir) {
+                if (id && !gameResult) {
+                    tryMove(dir);
+                }
             }
         </script>
     </body>
