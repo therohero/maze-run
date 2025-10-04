@@ -106,7 +106,6 @@
         <div id="gameEndOverlay">
             <div id="gameEndContent"></div>
         </div>
-        <button style="position: absolute; bottom: 10px; left: 10px;" onclick="leaveGame()">Spiel verlassen</button>
 
         <script>
             let players = [];
@@ -272,15 +271,6 @@
                         ctx.strokeText(pname, px + CELL_SIZE/2, py - 6);
                         ctx.fillText(pname, px + CELL_SIZE/2, py - 6);
                     }
-                }
-            }
-
-            function leaveGame() {
-                if (id) {
-                    fetch(`/leave?id=${id}`)
-                    .then(() => {
-                        window.location.href = "https://example.com"
-                    })
                 }
             }
 
