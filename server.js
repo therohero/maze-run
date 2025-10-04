@@ -1,6 +1,3 @@
-// --- Chat Speicher ---
-let chatMessages = [];
-
 const express = require('express');
 const path = require('path');
 
@@ -9,13 +6,16 @@ const PORT = process.env.PORT || 3000;
 
 // Labyrinth-Parameter
 const CELL_SIZE = 40;
-const COLS = Math.floor(1920 / CELL_SIZE);
-const ROWS = Math.floor(1080 / CELL_SIZE);
+let COLS = Math.floor(1920 / CELL_SIZE) - 1; // <--- HIER -1 !
+let ROWS = Math.floor(1080 / CELL_SIZE);     // Zeilen bleiben gleich
+// NICHTS abziehen!
 let maze = generateMaze(COLS, ROWS);
 const players = [];
 let gameLocked = false; // Wenn true, kann keiner mehr joinen
 let ghosts = []; // Array für Geister
 let deadPlayers = []; // Array für tote Spieler
+let powerups = [];
+const powerupTypes = ['ghost_hidden', 'player_hidden', 'frozen_ghost'];
 
 // Spiel-Status-Variablen
 let gameStartTime = null;
@@ -25,8 +25,10 @@ let gameInterval = null;
 
 // Labyrinth-Generator (Depth-First Search)
 function generateMaze(cols, rows) {
+    // 1. Initialisiere alles mit Wand
     let maze = Array.from({ length: rows }, () => Array(cols).fill(0));
 
+    // 2. Nur das Innere wird bearbeitet (Rand bleibt Wand)
     function carve(x, y) {
         maze[y][x] = 1;
         const dirs = [
@@ -37,8 +39,8 @@ function generateMaze(cols, rows) {
             const nx = x + dx;
             const ny = y + dy;
             if (
-                nx > 0 && nx < cols &&
-                ny > 0 && ny < rows &&
+                nx > 0 && nx < cols - 1 &&
+                ny > 0 && ny < rows - 1 &&
                 maze[ny][nx] === 0
             ) {
                 maze[y + dy / 2][x + dx / 2] = 1;
@@ -48,8 +50,8 @@ function generateMaze(cols, rows) {
     }
 
     carve(1, 1);
-    maze[1][0] = 1; // Eingang links
-    maze[rows - 2][cols - 1] = 1; // Ausgang rechts unten
+
+    // ENTFERNE den Block, der die rechte Wand nochmal setzt!
 
     return maze;
 }
@@ -58,33 +60,21 @@ function getGhostCount(playerCount) {
     return Math.ceil(playerCount / 10);
 }
 
-// Chat-API: Nachrichten holen
-app.get('/chat', (req, res) => {
-    res.json(chatMessages.slice(-30)); // Nur die letzten 30 Nachrichten
-});
-
-// Chat-API: Nachricht senden
-app.post('/chat', express.json(), (req, res) => {
-    const { id, text } = req.body;
-    const player = players.find(p => p.id === id);
-    if (!player || !text || typeof text !== 'string') return res.status(400).end();
-    chatMessages.push({ name: player.name || 'Spieler', text: text.substring(0,100) });
-    if (chatMessages.length > 100) chatMessages = chatMessages.slice(-100);
-    res.json({ ok: true });
-});
-// Chat-API: Nachricht senden per GET (nicht empfohlen)
-app.get('/chat/send', (req, res) => {
-    const { id, text } = req.query;
-    const player = players.find(p => p.id === id);
-    if (!player || !text || typeof text !== 'string') return res.status(400).end();
-    chatMessages.push({ name: player.name || 'Spieler', text: text.substring(0,100) });
-    if (chatMessages.length > 100) chatMessages = chatMessages.slice(-100);
-    res.json({ ok: true });
-});
-
 app.get('/maze', (req, res) => {
     res.json({ maze, cols: COLS, rows: ROWS, cellSize: CELL_SIZE });
 });
+
+function getFreeFields() {
+    const freeFields = [];
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            if (maze[y][x] === 1) {
+                freeFields.push({ x, y });
+            }
+        }
+    }
+    return freeFields;
+}
 
 app.get('/join', (req, res) => {
     // Join ist immer erlaubt
@@ -99,20 +89,12 @@ app.get('/join', (req, res) => {
         const playerId = Date.now().toString(36) + Math.random().toString(36);
 
     // Suche alle freien Felder (maze[y][x] === 1)
-    const freeFields = [];
-    for (let y = 0; y < ROWS; y++) {
-        for (let x = 0; x < COLS; x++) {
-            if (maze[y][x] === 1) {
-                freeFields.push({ x, y });
-            }
-        }
-    }
 
-    if (freeFields.length === 0) {
+    if (getFreeFields().length === 0) {
         return res.status(500).json({ error: 'Kein freier Platz im Labyrinth!' });
     }
 
-    const start = freeFields[Math.floor(Math.random() * freeFields.length)];
+    const start = getFreeFields()[Math.floor(Math.random() * getFreeFields().length)];
 
     // Jeder 11., 21., ... Spieler ist sofort ein Geist
     let isGhost = false;
@@ -122,7 +104,7 @@ app.get('/join', (req, res) => {
         ghosts.push(playerId);
     }
 
-    players.push({ id: playerId, x: start.x, y: start.y, alive: true, isGhost, lastKill: 0, name });
+    players.push({ id: playerId, x: start.x, y: start.y, alive: true, isGhost, lastKill: 0, name, activatePowerups: [] });
     res.json({ playerId });
 });
 
@@ -153,9 +135,19 @@ function startGameTimer() {
                 }),
                 survivors: players.filter(p => !p.isGhost).map(p => ({
                     id: p.id,
-                    liveTime: (p.deathTime ? p.deathTime : Date.now()) - gameStartTime
+                    liveTime: (p.deathTime ? p.deathTime : Date.now()) - gameStartTime,
+                    kills: 0 // Spieler haben immer 0 kills!
                 })),
-                winner: alivePlayers.length === 0 ? 'Geister' : 'Überlebende'
+                winner: (() => {
+                    // Jeder 2 Minuten überlebte Zeit zählt wie ein "Kill" für die Auswertung des Gewinners,
+                    // aber NICHT für die Anzeige der Kills!
+                    const maxSurvive = Math.max(...players.filter(p => !p.isGhost).map(p =>
+                        (p.deathTime ? p.deathTime : Date.now()) - gameStartTime
+                    ), 0);
+                    // Wenn ein Spieler mindestens 2 Minuten überlebt hat, gewinnen die Überlebenden
+                    if (maxSurvive >= 2 * 60 * 1000) return 'Überlebende';
+                    return alivePlayers.length === 0 ? 'Geister' : 'Überlebende';
+                })()
             };
             setTimeout(resetGame, 10 * 1000); // Nach 10 Sekunden resetten
             clearInterval(gameInterval);
@@ -167,14 +159,7 @@ function startGameTimer() {
 function resetGame() {
     maze = generateMaze(COLS, ROWS);
 
-    const freeFields = [];
-    for (let y = 0; y < ROWS; y++) {
-        for (let x = 0; x < COLS; x++) {
-            if (maze[y][x] === 1) {
-                freeFields.push({ x, y });
-            }
-        }
-    }
+    const freeFields = getFreeFields();
 
     for (const p of players) {
         const start = freeFields[Math.floor(Math.random() * freeFields.length)];
@@ -201,6 +186,13 @@ app.post('/lock', (req, res) => {
 
     gameLocked = true;
     const ghostCount = getGhostCount(players.length);
+
+    // Erste Power setzen
+    powerups.push({
+        type: powerupTypes[Math.floor(Math.random() * powerupTypes.length)],
+        x: getFreeFields()[Math.floor(Math.random() * getFreeFields().length)].x,
+        y: getFreeFields()[Math.floor(Math.random() * getFreeFields().length)].y,
+    });
 
     // Nur noch fehlende Geister bestimmen (falls durch Join schon welche gesetzt wurden)
     const aktuelleGeister = ghosts.slice();
@@ -232,6 +224,7 @@ app.get('/move', (req, res) => {
     const player = players.find(p => p.id === id);
     if (!player) return res.status(400).json({ error: 'Invalid player ID' });
     if (!player.alive) return res.status(403).json({ error: 'Du bist tot!' });
+    if (isFrozenGhost() && player.isGhost) return res.status(403).json({ error: 'Geister sind eingefroren!' });
 
     // Schrittweite
     const step = 1;
@@ -280,10 +273,40 @@ app.get('/move', (req, res) => {
         }
     }
 
+    // Powerup einsammeln
+    for (let i = 0; i < powerups.length; i++) {
+        const pu = powerups[i];
+        if (Math.abs(pu.x - player.x) < step && Math.abs(pu.y - player.y) < step) {
+            player.activatePowerups.push({ type: pu.type, duration: 20 });
+            powerups.splice(i, 1);
+            i--;
+        }
+    }
+
     res.json({ player });
 });
 
+function isFrozenGhost() {
+    for (const p of players) {
+        for (const ap of p.activatePowerups) {
+            if (ap.type === 'frozen_ghost' && ap.duration > 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
+setInterval(() => {
+    for (const p of players) {
+        for (const ap of p.activatePowerups) {
+            ap.duration--;
+            if (ap.duration <= 0) {
+                p.activatePowerups = p.activatePowerups.filter(a => a !== ap);
+            }
+        }
+    }
+}, 1000);
 
 // API für alle Spieler inkl. Status
 app.get('/players', (req, res) => {
@@ -304,11 +327,30 @@ app.get('/status', (req, res) => {
     } else {
         timeLeft = 10 * 60;
     }
-    res.json({ timeLeft, gameLocked });
+    res.json({ timeLeft, gameLocked, powerups });
 });
 
 app.use(express.static(__dirname));
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ Server running on port ${PORT} or on http://localhost:${PORT}`);
 });
+
+// Powerups alle 20 Sekunden erneuern
+setInterval(() => {
+    if (!gameLocked) return; // Nur wenn Spiel läuft
+    // Powerups leeren
+    powerups = [];
+    const freeFields = getFreeFields();
+    // 1 bis 5 neue Powerups erzeugen
+    const count = 1 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < count && freeFields.length > 0; i++) {
+        const idx = Math.floor(Math.random() * freeFields.length);
+        const field = freeFields.splice(idx, 1)[0];
+        powerups.push({
+        type: powerupTypes[Math.floor(Math.random() * powerupTypes.length)],
+            x: field.x,
+            y: field.y
+        });
+    }
+}, 20000);
