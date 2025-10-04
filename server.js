@@ -187,13 +187,6 @@ app.post('/lock', (req, res) => {
     gameLocked = true;
     const ghostCount = getGhostCount(players.length);
 
-    // Erste Power setzen
-    powerups.push({
-        type: powerupTypes[Math.floor(Math.random() * powerupTypes.length)],
-        x: getFreeFields()[Math.floor(Math.random() * getFreeFields().length)].x,
-        y: getFreeFields()[Math.floor(Math.random() * getFreeFields().length)].y,
-    });
-
     // Nur noch fehlende Geister bestimmen (falls durch Join schon welche gesetzt wurden)
     const aktuelleGeister = ghosts.slice();
     const nochZuVergeben = ghostCount - aktuelleGeister.length;
