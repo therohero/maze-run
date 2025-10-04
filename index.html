@@ -45,13 +45,63 @@
         <div id="startScreen" style="position:fixed;left:0;top:0;width:100vw;height:100vh;background:#111;z-index:200;display:flex;align-items:center;justify-content:center;">
             <div style="background:#222;padding:40px 60px;border-radius:20px;box-shadow:0 0 40px #000;text-align:center;min-width:400px;">
                 <h1 style="color:#FFD700;">Maze Escape</h1>
-                <p style="color:#fff;font-size:1.2em;">Finde den Ausgang, ohne vom Geist erwischt zu werden!<br>Jeder 11. Spieler wird automatisch ein Geist.<br>Gib deinen Namen ein, um zu starten:</p>
+                <p style="color:#fff;font-size:1.2em;">
+                    Überlebe so lange wie möglich im Labyrinth und weiche den Geistern aus!<br>
+                    Jeder 11., 21., 31., ... Spieler wird automatisch ein Geist.<br><br>
+                    <b>Spielregeln:</b><br>
+                    - Bewege dich mit den Pfeiltasten (oder Wischen auf dem Handy) durch das Labyrinth.<br>
+                    - Geister versuchen, die Spieler zu fangen.<br>
+                    - Wenn du als Spieler gefangen wirst, stirbst du.<br>
+                    - Das Spiel endet, wenn alle Spieler gestorben sind oder die Zeit abläuft.<br>
+                    - Es gibt keinen Ausgang – Ziel ist es, möglichst lange zu überleben.<br><br>
+                    <b>Powerups:</b><br>
+                    - Im Labyrinth erscheinen regelmäßig Powerups, die du aufsammeln kannst.<br>
+                    - Aktive Powerups werden dir oben rechts angezeigt.<br>
+                    - Manche Powerups wirken sofort, andere für eine bestimmte Zeit.<br>
+                    <span style="color:#FFD700">
+                        <b>player_hidden:</b> Macht dich für Geister unsichtbar, andere Spieler sehen dich weiterhin.<br>
+                        <b>ghost_hidden:</b> Macht dich als Geist für Spieler unsichtbar, andere Geister sehen dich weiterhin.<br>
+                        <b>frozen_ghost:</b> Lässt alle Geister für kurze Zeit einfrieren.<br>
+                        (Weitere Powerups können im Spiel erscheinen!)
+                    </span>
+                    <br><br>
+                    <b>Powerup-Sichtbarkeit:</b><br>
+                    <span style="color:#FFD700">
+                        Spieler mit <b>player_hidden</b> sind nur für Geister unsichtbar, andere Spieler sehen sie weiterhin.<br>
+                        Geister mit <b>ghost_hidden</b> sind nur für Spieler unsichtbar, andere Geister sehen sie weiterhin.<br>
+                        Jeder sieht sich selbst immer.<br>
+                        Der Nametag wird nur angezeigt, wenn der Spieler/Geist sichtbar ist.
+                    </span>
+                    <br><br>
+                    <b>Beispiele:</b><br>
+                    <span style="color:#FFD700">
+                        Du bist ein Geist. Ein Spieler hat <b>player_hidden</b> aktiv: Du siehst ihn nicht, aber andere Spieler schon.<br>
+                        Du bist ein Spieler. Ein Geist hat <b>ghost_hidden</b> aktiv: Du siehst ihn nicht, aber andere Geister schon.
+                    </span>
+                    <br><br>
+                    Gib deinen Namen ein, um zu starten:
+                </p>
                 <input id="nameInput" type="text" maxlength="16" placeholder="Dein Name" style="font-size:1.2em;padding:8px 16px;border-radius:8px;border:none;outline:none;">
                 <br><br>
                 <button id="startBtn" style="font-size:1.2em;padding:8px 32px;border-radius:8px;background:#FFD700;color:#222;border:none;cursor:pointer;">Start</button>
             </div>
         </div>
         <canvas id="gameCanvas"></canvas>
+        <div id="activePowerups" style="
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 20;
+            background: rgba(34,34,34,0.85);
+            border-radius: 12px;
+            padding: 12px 18px;
+            min-width: 120px;
+            color: #FFD700;
+            font-family: Arial, sans-serif;
+            font-size: 18px;
+            box-shadow: 0 2px 12px #0008;
+            display: none;
+        "></div>
         <button id="lockBtn" style="position:absolute;top:10px;right:10px;z-index:10;">Keiner kommt mehr!</button>
         <div id="gameEndOverlay">
             <div id="gameEndContent"></div>
@@ -122,6 +172,16 @@
             let showRole = '';
             let gameStartDisplayTime = 0;
             let lastGameLocked = false;
+            let powerups = [];
+
+            powerImgs = {
+                'ghost_hidden': new Image(),
+                'player_hidden': new Image(),
+                'frozen_ghost': new Image()
+            };
+            powerImgs['ghost_hidden'].src = 'ghost_hidden.png';
+            powerImgs['player_hidden'].src = 'player_hidden.png';
+            powerImgs['frozen_ghost'].src = 'frozen_ghosts.png';
 
             function updateGameStartDisplay() {
                 // Wenn das Spiel gerade gelockt wurde (Übergang von false zu true)
@@ -176,20 +236,41 @@
                     if (player.death) continue;
                     let px = player.x * CELL_SIZE;
                     let py = player.y * CELL_SIZE;
-                    if (player.isGhost) {
-                        ctx.drawImage(ghostImg, px, py, CELL_SIZE, CELL_SIZE);
-                    } else {
-                        ctx.drawImage(playerImg, px, py, CELL_SIZE, CELL_SIZE);
+
+                    const isMe = player.id === id;
+                    const act = player.activatePowerups || [];
+                    const hasPlayerHidden = act.includes('player_hidden') || act.some(p => p.type === 'player_hidden');
+                    const hasGhostHidden = act.includes('ghost_hidden') || act.some(p => p.type === 'ghost_hidden');
+
+                    // Wer bin ich?
+                    const me = players.find(p => p.id === id);
+                    const iAmGhost = me && me.isGhost;
+
+                    // Sichtbarkeitslogik:
+                    // - Spieler mit player_hidden sind für Geister unsichtbar, für andere Spieler sichtbar
+                    // - Geister mit ghost_hidden sind für Spieler unsichtbar, für andere Geister sichtbar
+                    let sichtbar = true;
+                    if (!isMe) {
+                        if (player.isGhost && hasGhostHidden && !iAmGhost) sichtbar = false; // Geist ist für Spieler unsichtbar
+                        if (!player.isGhost && hasPlayerHidden && iAmGhost) sichtbar = false; // Spieler ist für Geister unsichtbar
                     }
-                    // Name über Kopf anzeigen (immer, Fallback: 'Spieler')
-                    const pname = player.name && player.name.trim() ? player.name : 'Spieler';
-                    ctx.font = 'bold 18px Arial';
-                    ctx.textAlign = 'center';
-                    ctx.fillStyle = '#fff';
-                    ctx.strokeStyle = '#111';
-                    ctx.lineWidth = 4;
-                    ctx.strokeText(pname, px + CELL_SIZE/2, py - 6);
-                    ctx.fillText(pname, px + CELL_SIZE/2, py - 6);
+
+                    if (sichtbar) {
+                        if (player.isGhost) {
+                            ctx.drawImage(ghostImg, px, py, CELL_SIZE, CELL_SIZE);
+                        } else {
+                            ctx.drawImage(playerImg, px, py, CELL_SIZE, CELL_SIZE);
+                        }
+                        // Nametag
+                        const pname = player.name && player.name.trim() ? player.name : 'Spieler';
+                        ctx.font = 'bold 18px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.fillStyle = '#fff';
+                        ctx.strokeStyle = '#111';
+                        ctx.lineWidth = 4;
+                        ctx.strokeText(pname, px + CELL_SIZE/2, py - 6);
+                        ctx.fillText(pname, px + CELL_SIZE/2, py - 6);
+                    }
                 }
             }
 
@@ -233,6 +314,7 @@
                 const data = await res.json();
                 timer = data.timeLeft;
                 gameLocked = data.gameLocked;
+                powerups = data.powerups;
             }
 
             function drawTimerAndResult() {
@@ -450,6 +532,8 @@
                     document.getElementById('lockBtn').style.display = 'none';
                 }
 
+                drawPowerups();
+                updateActivePowerupsDisplay(); // <-- hier einfügen!
                 updateGameStartDisplay(); // Hier die Anzeige für alle Spieler steuern
 
                 if (id && !gameResult) {
@@ -504,6 +588,19 @@
             // Handy-Erkennung
             function isMobile() {
                 return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+            }
+
+            function drawPowerups() {
+                for (const power of powerups) {
+                    const px = power.x * CELL_SIZE;
+                    const py = power.y * CELL_SIZE;
+                    const img = powerImgs[power.type];
+                    // Nur zeichnen, wenn das Bild geladen ist und nicht "kaputt"
+                    if (img && img.complete && img.naturalWidth > 0) {
+                        ctx.drawImage(img, px, py, CELL_SIZE, CELL_SIZE);
+                    }
+                    // Sonst NICHTS zeichnen (kein Emoji, kein Fehler)
+                }
             }
 
             // Touch-Gesten für Wischen/Drücken auf dem ganzen Bildschirm
@@ -565,6 +662,29 @@
                 if (id && !gameResult) {
                     tryMove(dir);
                 }
+            }
+
+            function updateActivePowerupsDisplay() {
+                const div = document.getElementById('activePowerups');
+                // Finde den eigenen Spieler
+                const me = players.find(p => p.id === id);
+                if (!me || !me.activatePowerups || me.activatePowerups.length === 0) {
+                    div.style.display = 'none';
+                    div.innerHTML = '';
+                    return;
+                }
+                div.style.display = 'block';
+                div.innerHTML = `<b>Aktive Powerups:</b><br>` +
+                    me.activatePowerups.map(p => {
+                        // p ist entweder ein String ("ghost_hidden") oder ein Objekt mit .type
+                        const type = typeof p === "string" ? p : p.type;
+                        const img = powerImgs[type];
+                        if (img && img.complete && img.naturalWidth > 0) {
+                            return `<img src="${img.src}" alt="${type}" style="width:32px;height:32px;vertical-align:middle;margin-right:8px;">${type.replace(/_/g," ")}`;
+                        } else {
+                            return `<span style="width:32px;height:32px;display:inline-block;vertical-align:middle;background:#444;margin-right:8px;"></span>${type.replace(/_/g," ")}`;
+                        }
+                    }).join('<br>');
             }
         </script>
     </body>
