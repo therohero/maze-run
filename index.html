@@ -42,7 +42,7 @@
         </style>
     </head>
     <body>
-        <div id="startScreen" style="position:fixed;left:0;top:0;width:100vw;height:100vh;background:#111;z-index:200;display:flex;align-items:center;justify-content:center;">
+        <div id="startScreen" style="scale: 0.8; position:fixed;left:0;top:0;width:100vw;height:100vh;background:#111;z-index:200;display:flex;align-items:center;justify-content:center;">
             <div style="background:#222;padding:40px 60px;border-radius:20px;box-shadow:0 0 40px #000;text-align:center;min-width:400px;">
                 <h1 style="color:#FFD700;">Maze Escape</h1>
                 <p style="color:#fff;font-size:1.2em;">
@@ -102,10 +102,11 @@
             box-shadow: 0 2px 12px #0008;
             display: none;
         "></div>
-        <button id="lockBtn" style="position:absolute;top:10px;right:10px;z-index:10;">Keiner kommt mehr!</button>
+        <button id="lockBtn" style="position:absolute;top:10px;right:10px;z-index:10;">Spiel starten</button>
         <div id="gameEndOverlay">
             <div id="gameEndContent"></div>
         </div>
+        <button style="position: absolute; bottom: 10px; left: 10px;" onclick="leaveGame()">Spiel verlassen</button>
 
         <script>
             let players = [];
@@ -271,6 +272,15 @@
                         ctx.strokeText(pname, px + CELL_SIZE/2, py - 6);
                         ctx.fillText(pname, px + CELL_SIZE/2, py - 6);
                     }
+                }
+            }
+
+            function leaveGame() {
+                if (id) {
+                    fetch(`/leave?id=${id}`)
+                    .then(() => {
+                        window.location.href = "https://example.com"
+                    })
                 }
             }
 
